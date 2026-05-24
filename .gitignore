@@ -1,0 +1,45 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build Folders
+bin/
+obj/
+
+# Rider
+.idea/
+
+# Resharper
+_ReSharper*/
+
+# Visual Studio Code
+.vscode/
+
+# Entity Framework
+Migrations/
+
+# Publish
+*.Publish.xml
+
+# Node
+node_modules/
+
+# Dotnet user secrets
+secrets.json
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Ignore database files
+*.mdf
+*.ldf
+
+# Logs
+*.log
+
+# Ignore .vs index files that may be locked
+.vs/**/FileContentIndex/
