@@ -5,6 +5,8 @@ public class Ticket
     public int Id { get; set; }
     public string? Title { get; set; }
     public string? Description { get; set; }
+    public DateTime DateCreated { get; set; }
+    public DateTime? DateResolved { get; set; }
 
     public int SubmittedById { get; set; }
     public User SubmittedBy { get; set; } = null!;

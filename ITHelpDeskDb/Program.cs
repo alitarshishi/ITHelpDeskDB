@@ -1,5 +1,8 @@
 using ITHelpDeskDb.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 namespace ITHelpDeskDb
 {
@@ -9,34 +12,70 @@ namespace ITHelpDeskDb
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            // Add services to the container.
             builder.Services.AddRazorPages();
+            builder.Services.AddControllers();
 
-            // Configure EF Core DbContext. Put your connection string in appsettings.json under "ConnectionStrings:DefaultConnection".
+            // JWT
+            var jwtKey = builder.Configuration["Jwt:Key"] ?? "ChangeThisDefaultKeyToSomethingSecure";
+            var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "ITHelpDeskDb";
+            var keyBytes = Encoding.UTF8.GetBytes(jwtKey);
+
+            builder.Services.AddAuthentication(options =>
+            {
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            }).AddJwtBearer(options =>
+            {
+                options.RequireHttpsMetadata = false;
+                options.SaveToken = true;
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = false,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = jwtIssuer,
+                    IssuerSigningKey = new SymmetricSecurityKey(keyBytes)
+                };
+            });
+
+            builder.Services.AddAuthorization();
+
+            // ✅ CORS — must be added before app.Build()
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("AllowReact", policy =>
+                    policy.WithOrigins("http://localhost:3001")
+                          .AllowAnyHeader()
+                          .AllowAnyMethod()
+                          .AllowCredentials());
+            });
+
             builder.Services.AddDbContext<AppDbContext>(options =>
                 options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
             var app = builder.Build();
 
-            // Configure the HTTP request pipeline.
             if (!app.Environment.IsDevelopment())
             {
                 app.UseExceptionHandler("/Error");
-                // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
                 app.UseHsts();
             }
 
             app.UseHttpsRedirection();
-
             app.UseRouting();
 
+            app.UseCors("AllowReact");   // ✅ before auth
+
+            app.UseAuthentication();
             app.UseAuthorization();
 
             app.MapStaticAssets();
-            app.MapRazorPages()
-               .WithStaticAssets();
+            app.MapRazorPages().WithStaticAssets();
+            app.MapControllers();
 
             app.Run();
         }
     }
 }
+
