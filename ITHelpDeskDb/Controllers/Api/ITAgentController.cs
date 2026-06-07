@@ -8,21 +8,17 @@ namespace ITHelpDeskDb.Controllers.Api;
 
 [ApiController]
 [Route("api/itagent")]
-[Authorize(Roles = "ITAgent")]
+[Authorize]
 public class ITAgentController : ControllerBase
 {
     private readonly AppDbContext _db;
 
-    public ITAgentController(AppDbContext db)
-    {
-        _db = db;
-    }
+    public ITAgentController(AppDbContext db) => _db = db;
 
-    // Get tickets assigned to the current agent
     [HttpGet("assigned")]
     public async Task<IActionResult> GetAssigned()
     {
-        if (!int.TryParse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var myId))
+        if (!int.TryParse(User.FindFirst("sub")?.Value, out var myId))  // ✅ fixed
             return Unauthorized();
 
         var tickets = await _db.Tickets
@@ -35,14 +31,24 @@ public class ITAgentController : ControllerBase
             .OrderByDescending(t => t.DateCreated)
             .ToListAsync();
 
-        return Ok(tickets);
+        return Ok(tickets.Select(t => new
+        {
+            t.Id,
+            t.Title,
+            t.Description,
+            t.DateCreated,
+            StatusName = t.Status?.Name,
+            PriorityName = t.Priority?.Name,
+            CategoryName = t.Category?.Name,
+            AssignedToName = t.AssignedTo?.UserName,
+            SubmittedByName = t.SubmittedBy?.UserName,
+        }));
     }
 
-    // Resolve a ticket (mark DateResolved and optionally update status)
     [HttpPost("{id}/resolve")]
     public async Task<IActionResult> ResolveTicket(int id, [FromBody] ResolveRequest? req)
     {
-        if (!int.TryParse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var myId))
+        if (!int.TryParse(User.FindFirst("sub")?.Value, out var myId))  // ✅ fixed
             return Unauthorized();
 
         var ticket = await _db.Tickets.FindAsync(id);
@@ -55,7 +61,6 @@ public class ITAgentController : ControllerBase
         if (req?.StatusId != null)
             ticket.StatusId = req.StatusId.Value;
 
-        // Add activity log
         _db.ActivityLogs.Add(new ActivityLog
         {
             Action = $"Ticket #{ticket.Id} resolved by agent {myId}",
@@ -68,12 +73,11 @@ public class ITAgentController : ControllerBase
         return NoContent();
     }
 
-    // Add a comment to a ticket by the agent
     [HttpPost("{id}/comment")]
     public async Task<IActionResult> AddComment(int id, [FromBody] CommentRequest req)
     {
         if (req is null || string.IsNullOrWhiteSpace(req.Text)) return BadRequest();
-        if (!int.TryParse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var myId))
+        if (!int.TryParse(User.FindFirst("sub")?.Value, out var myId))  // ✅ fixed
             return Unauthorized();
 
         var ticket = await _db.Tickets.FindAsync(id);

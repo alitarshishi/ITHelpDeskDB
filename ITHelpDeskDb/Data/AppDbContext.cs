@@ -87,15 +87,26 @@ public class AppDbContext : DbContext
         );
 
         modelBuilder.Entity<Category>().HasData(
-            new Category { Id = 1, Name = "General" }
-        );
+            new Category { Id = 1, Name = "Hardware" },
+            new Category { Id = 2, Name = "Software" },
+            new Category { Id = 3, Name = "Network" },
+            new Category { Id = 4, Name = "Email" },
+            new Category { Id = 5, Name = "Access" },
+            new Category { Id = 6, Name = "Other" }
+);
 
         modelBuilder.Entity<Priority>().HasData(
-            new Priority { Id = 1, Name = "Normal" }
-        );
+           new Priority { Id = 1, Name = "Low" },
+           new Priority { Id = 2, Name = "Medium" },
+           new Priority { Id = 3, Name = "High" },
+           new Priority { Id = 4, Name = "Critical" }
+);
 
         modelBuilder.Entity<Status>().HasData(
-            new Status { Id = 1, Name = "Open" }
+            new Status { Id = 1, Name = "Open" },
+            new Status { Id = 2, Name = "In Progress" },
+            new Status { Id = 3, Name = "Resolved" },
+            new Status { Id = 4, Name = "Closed" }
         );
 
         // Create deterministic seeded users (Admin, Employee, ITAgent, Manager)

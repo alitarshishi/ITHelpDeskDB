@@ -13,58 +13,68 @@ public class ManagerController : ControllerBase
 {
     private readonly AppDbContext _db;
 
-    public ManagerController(AppDbContext db)
-    {
-        _db = db;
-    }
+    public ManagerController(AppDbContext db) => _db = db;
 
-    // Monitor all team tickets (optionally filter by agent)
+    // ── GET /api/manager/team-tickets ──────────────────
     [HttpGet("team-tickets")]
-    public async Task<IActionResult> TeamTickets([FromQuery] int? agentId)
+    public async Task<IActionResult> TeamTickets()
     {
-        var query = _db.Tickets
+        var managerId = int.Parse(User.FindFirst("sub")!.Value);
+
+        var tickets = await _db.Tickets
             .Include(t => t.SubmittedBy)
             .Include(t => t.AssignedTo)
             .Include(t => t.Priority)
             .Include(t => t.Category)
             .Include(t => t.Status)
-            .AsQueryable();
-
-        if (agentId != null)
-            query = query.Where(t => t.AssignedToId == agentId);
-
-        var tickets = await query.OrderByDescending(t => t.DateCreated).ToListAsync();
-        return Ok(tickets);
-    }
-
-    // Simple report: counts grouped by status
-    [HttpGet("reports/status-counts")]
-    public async Task<IActionResult> StatusCounts()
-    {
-        var counts = await _db.Tickets
-            .GroupBy(t => t.StatusId)
-            .Select(g => new { StatusId = g.Key, Count = g.Count() })
+            .Where(t => t.AssignedToId == managerId)  // only this manager's tickets
+            .OrderByDescending(t => t.DateCreated)
             .ToListAsync();
 
-        return Ok(counts);
+        return Ok(tickets.Select(t => new
+        {
+            t.Id,
+            t.Title,
+            t.Description,
+            t.DateCreated,
+            StatusName = t.Status?.Name,
+            PriorityName = t.Priority?.Name,
+            CategoryName = t.Category?.Name,
+            AssignedToName = t.AssignedTo?.UserName,
+            AssignedToId = t.AssignedToId,
+            SubmittedByName = t.SubmittedBy?.UserName,
+        }));
     }
 
-    // Report: average resolution time (hours) for resolved tickets
-    [HttpGet("reports/avg-resolution-hours")]
-    public async Task<IActionResult> AverageResolutionHours()
+    // ── GET /api/users/managers ────────────────────────
+    [HttpGet("~/api/users/managers")]
+    [Authorize]
+    public async Task<IActionResult> GetManagers()
     {
-        var resolved = await _db.Tickets
-            .Where(t => t.DateResolved != null)
-            .Select(t => new { t.Id, Hours = EF.Functions.DateDiffHour(t.DateCreated, t.DateResolved!.Value) })
+        var managers = await _db.Users
+            .Include(u => u.Role)
+            .Where(u => u.Role.Name == "Manager")
+            .Select(u => new { u.Id, u.UserName })
             .ToListAsync();
 
-        if (resolved.Count == 0) return Ok(new { averageHours = 0 });
-
-        var avg = resolved.Average(r => r.Hours);
-        return Ok(new { averageHours = avg });
+        return Ok(managers);
     }
 
-    // Manager can change ticket priority or reassign
+    // ── GET /api/users/itagents ────────────────────────
+    [HttpGet("~/api/users/itagents")]
+    [Authorize]
+    public async Task<IActionResult> GetItAgents()
+    {
+        var agents = await _db.Users
+            .Include(u => u.Role)
+            .Where(u => u.Role.Name == "IT Agent")
+            .Select(u => new { u.Id, u.UserName })
+            .ToListAsync();
+
+        return Ok(agents);
+    }
+
+    // ── PATCH /api/manager/{id}/update ────────────────
     [HttpPatch("{id}/update")]
     public async Task<IActionResult> UpdateTicket(int id, [FromBody] ManagerUpdateRequest req)
     {
@@ -80,11 +90,41 @@ public class ManagerController : ControllerBase
             Action = $"Manager updated ticket #{ticket.Id}",
             Timestamp = DateTime.UtcNow,
             TicketId = ticket.Id,
-            UserId = int.TryParse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var mId) ? mId : null
+            UserId = int.TryParse(User.FindFirst("sub")?.Value, out var mId) ? mId : null  
         });
 
         await _db.SaveChangesAsync();
         return NoContent();
+    }
+
+    // ── GET /api/manager/reports/status-counts ────────
+    [HttpGet("reports/status-counts")]
+    public async Task<IActionResult> StatusCounts()
+    {
+        var counts = await _db.Tickets
+            .GroupBy(t => t.StatusId)
+            .Select(g => new { StatusId = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        return Ok(counts);
+    }
+
+    // ── GET /api/manager/reports/avg-resolution-hours ─
+    [HttpGet("reports/avg-resolution-hours")]
+    public async Task<IActionResult> AverageResolutionHours()
+    {
+        var resolved = await _db.Tickets
+            .Where(t => t.DateResolved != null)
+            .Select(t => new
+            {
+                t.Id,
+                Hours = EF.Functions.DateDiffHour(t.DateCreated, t.DateResolved!.Value)
+            })
+            .ToListAsync();
+
+        if (resolved.Count == 0) return Ok(new { averageHours = 0 });
+
+        return Ok(new { averageHours = resolved.Average(r => r.Hours) });
     }
 }
 

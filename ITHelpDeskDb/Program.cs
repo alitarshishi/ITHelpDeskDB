@@ -28,6 +28,7 @@ namespace ITHelpDeskDb
             {
                 options.RequireHttpsMetadata = false;
                 options.SaveToken = true;
+                options.MapInboundClaims = false;
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,
@@ -35,7 +36,8 @@ namespace ITHelpDeskDb
                     ValidateLifetime = true,
                     ValidateIssuerSigningKey = true,
                     ValidIssuer = jwtIssuer,
-                    IssuerSigningKey = new SymmetricSecurityKey(keyBytes)
+                    IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
+                    RoleClaimType= "role"
                 };
             });
 
@@ -45,7 +47,7 @@ namespace ITHelpDeskDb
             builder.Services.AddCors(options =>
             {
                 options.AddPolicy("AllowReact", policy =>
-                    policy.WithOrigins("http://localhost:3001")
+                    policy.WithOrigins("http://localhost:3000")
                           .AllowAnyHeader()
                           .AllowAnyMethod()
                           .AllowCredentials());

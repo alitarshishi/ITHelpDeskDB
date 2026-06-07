@@ -8,7 +8,7 @@ namespace ITHelpDeskDb.Controllers.Api;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = "Admin")]
+[Authorize]
 public class UsersController : ControllerBase
 {
     private readonly AppDbContext _db;
@@ -19,23 +19,26 @@ public class UsersController : ControllerBase
     }
 
     [HttpGet]
+    [Authorize(Roles = "Admin")]
     public async Task<IActionResult> GetAll()
     {
         var users = await _db.Users.Include(u => u.Role).ToListAsync();
-        // Do not return password data
         var dto = users.Select(u => new { u.Id, u.UserName, u.Email, Role = u.Role?.Name });
         return Ok(dto);
     }
 
     [HttpGet("{id}")]
+    [Authorize(Roles = "Admin")]
     public async Task<IActionResult> Get(int id)
     {
         var u = await _db.Users.Include(x => x.Role).FirstOrDefaultAsync(x => x.Id == id);
         if (u == null) return NotFound();
+
         return Ok(new { u.Id, u.UserName, u.Email, Role = u.Role?.Name });
     }
 
     [HttpPost]
+    [Authorize(Roles = "Admin")]
     public async Task<IActionResult> Create([FromBody] CreateUserRequest req)
     {
         var user = new User
@@ -44,10 +47,30 @@ public class UsersController : ControllerBase
             Email = req.Email,
             RoleId = req.RoleId
         };
+
         user.SetPassword(req.Password);
+
         _db.Users.Add(user);
         await _db.SaveChangesAsync();
+
         return CreatedAtAction(nameof(Get), new { id = user.Id }, new { user.Id, user.UserName, user.Email });
+    }
+
+    [HttpGet("managers")]
+    [Authorize]
+    public async Task<IActionResult> GetManagers()
+    {
+        var managers = await _db.Users
+            .Include(u => u.Role)
+            .Where(u => u.Role.Name == "Manager")
+            .Select(u => new
+            {
+                u.Id,
+                u.UserName
+            })
+            .ToListAsync();
+
+        return Ok(managers);
     }
 }
 

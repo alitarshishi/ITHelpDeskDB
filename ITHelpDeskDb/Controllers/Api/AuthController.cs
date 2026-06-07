@@ -1,5 +1,6 @@
 using ITHelpDeskDb.Data;
 using ITHelpDeskDb.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -28,7 +29,7 @@ public class AuthController : ControllerBase
         if (req is null || string.IsNullOrEmpty(req.Email) || string.IsNullOrEmpty(req.Password))
             return BadRequest();
 
-        // ✅ Include Role so user.Role.Name is available
+        //  Include Role so user.Role.Name is available
         var user = _db.Users
                       .Include(u => u.Role)
                       .FirstOrDefault(u => u.Email == req.Email);
@@ -45,14 +46,15 @@ public class AuthController : ControllerBase
 
         var claims = new List<Claim>
         {
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new Claim(ClaimTypes.Name,           user.UserName ?? string.Empty),
-            new Claim(ClaimTypes.Email,          user.Email ?? string.Empty),
-            new Claim(ClaimTypes.Role,           roleName),
+            new Claim("sub",   user.Id.ToString()),
+            new Claim("name",  user.UserName ?? string.Empty),
+            new Claim("email", user.Email    ?? string.Empty),
+            new Claim("role",  roleName),
         };
 
         var token = new JwtSecurityToken(
             issuer: jwtIssuer,
+            
             claims: claims,
             expires: DateTime.UtcNow.AddHours(8),
             signingCredentials: creds);
@@ -70,6 +72,13 @@ public class AuthController : ControllerBase
             redirectUrl,
             user = new { user.Id, user.UserName, user.Email, Role = roleName }
         });
+    }
+    [HttpPost("logout")]
+    [Authorize]
+    public IActionResult Logout()
+    {
+        
+        return NoContent();
     }
 }
 
