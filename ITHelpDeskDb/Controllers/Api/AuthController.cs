@@ -1,5 +1,7 @@
 using ITHelpDeskDb.Data;
 using ITHelpDeskDb.Models;
+using ITHelpDeskDb.Models.DTOs.Requests;
+using ITHelpDeskDb.Models.DTOs.Responses;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -59,18 +61,27 @@ public class AuthController : ControllerBase
             expires: DateTime.UtcNow.AddHours(8),
             signingCredentials: creds);
 
-        string redirectUrl = roleName.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-            ? "/admin/dashboard"
-            : roleName.Equals("Employee", StringComparison.OrdinalIgnoreCase)
-                ? "/employee/dashboard"
-                : "/";
-
-        return Ok(new
+        string redirectUrl = roleName switch
         {
-            token = new JwtSecurityTokenHandler().WriteToken(token),
-            role = roleName,
-            redirectUrl,
-            user = new { user.Id, user.UserName, user.Email, Role = roleName }
+            "Admin" => "/admin/dashboard",
+            "Employee" => "/employee/dashboard",
+            "Manager" => "/manager/dashboard",
+            "IT Agent" => "/itagent/dashboard",   
+            _ => "/"
+        };
+
+        return Ok(new AuthResponse
+        {
+            Token = new JwtSecurityTokenHandler().WriteToken(token),
+            Role = roleName,
+            RedirectUrl = redirectUrl,
+            User = new UserResponse
+            {
+                Id = user.Id,
+                UserName = user.UserName,
+                Email = user.Email,
+                Role = roleName,
+            }
         });
     }
     [HttpPost("logout")]

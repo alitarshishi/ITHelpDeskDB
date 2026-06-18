@@ -4,6 +4,8 @@ public class ActivityLog
 {
     public int Id { get; set; }
     public string? Action { get; set; }
+
+    public string? EventType { get; set; }
     public DateTime Timestamp { get; set; }
 
     public int? TicketId { get; set; }

@@ -23,6 +23,9 @@ public class Ticket
     public int StatusId { get; set; }
     public Status Status { get; set; } = null!;
 
+    public int? AssignedByManagerId { get; set; }
+    public User? AssignedByManager { get; set; }
+
     public ICollection<TicketComment> Comments { get; set; } = new List<TicketComment>();
     public ICollection<TicketAttachment> Attachments { get; set; } = new List<TicketAttachment>();
     public ICollection<Notification> Notifications { get; set; } = new List<Notification>();

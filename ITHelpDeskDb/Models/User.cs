@@ -14,10 +14,12 @@ public class User
     public string? PasswordHash { get; set; }
     public string? PasswordSalt { get; set; }
 
-    //public string? CreatedBy { get; set; }
-    //public DateTime? CreatedDate { get; set; }
-    //public string? UpdatedBy { get; set; }
-    //public DateTime? UpdatedDate { get; set; }
+    public bool IsActive { get; set; } = true;
+
+    public string? CreatedBy { get; set; }
+    public DateTime? CreatedDate { get; set; }
+    public string? UpdatedBy { get; set; }
+    public DateTime? UpdatedDate { get; set; }
 
     // One-to-many: each User has a single Role
     public int RoleId { get; set; }

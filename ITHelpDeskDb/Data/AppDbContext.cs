@@ -78,6 +78,12 @@ public class AppDbContext : DbContext
             .HasForeignKey(al => al.TicketId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        modelBuilder.Entity<Ticket>()
+            .HasOne(t => t.AssignedByManager)
+            .WithMany()
+            .HasForeignKey(t => t.AssignedByManagerId)
+            .OnDelete(DeleteBehavior.Restrict);
+
         // Seed some basic lookup data and test users + tickets
         modelBuilder.Entity<Role>().HasData(
             new Role { Id = 1, Name = "Admin" },
