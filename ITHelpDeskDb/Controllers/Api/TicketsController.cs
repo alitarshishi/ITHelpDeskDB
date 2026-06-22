@@ -1,10 +1,11 @@
 using ITHelpDeskDb.Data;
 using ITHelpDeskDb.Models;
+using ITHelpDeskDb.Models.DTOs.Requests;
 using ITHelpDeskDb.Models.DTOs.Responses;
+using ITHelpDeskDb.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using ITHelpDeskDb.Models.DTOs.Requests;
 
 namespace ITHelpDeskDb.Controllers.Api;
 
@@ -14,10 +15,12 @@ namespace ITHelpDeskDb.Controllers.Api;
 public class TicketsController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly NotificationService _notifier;
 
-    public TicketsController(AppDbContext db)
+    public TicketsController(AppDbContext db, NotificationService notifier)
     {
         _db = db;
+        _notifier = notifier;
     }
 
     [HttpGet]
@@ -98,7 +101,8 @@ public class TicketsController : ControllerBase
             PriorityId = req.PriorityId,
             StatusId = req.StatusId,
             SubmittedById = req.SubmittedById,
-            AssignedToId = req.AssignedToId,
+            AssignedToId = null,                 
+            AssignedByManagerId = req.AssignedToId,
             DateCreated = DateTime.UtcNow,
         };
 
@@ -113,6 +117,15 @@ public class TicketsController : ControllerBase
             Action = $"Ticket created by {submitter?.UserName}",
             Timestamp = DateTime.UtcNow,
         });
+        if (req.AssignedToId != null) // the manager picked at creation
+        {
+            await _notifier.NotifyAsync(
+                req.AssignedToId.Value,
+                ticket.Id,
+                "TicketCreated",
+                $"New ticket TKT-{ticket.Id:D4} created by {submitter?.UserName}"
+            );
+        }
         await _db.SaveChangesAsync();
         return CreatedAtAction(nameof(Get), new { id = ticket.Id }, new { ticket.Id });
     }
@@ -269,6 +282,26 @@ public class TicketsController : ControllerBase
             Action = $"{author?.UserName} added a comment",
             Timestamp = DateTime.UtcNow,
         });
+        
+
+        if (userId == ticket.SubmittedById && ticket.AssignedToId != null)
+        {
+            await _notifier.NotifyAsync(
+                ticket.AssignedToId.Value,
+                ticket.Id,
+                "Comment",
+                $"{author?.UserName} commented on TKT-{ticket.Id:D4}"
+            );
+        }
+        else if (userId == ticket.AssignedToId)
+        {
+            await _notifier.NotifyAsync(
+                ticket.SubmittedById,
+                ticket.Id,
+                "Comment",
+                $"{author?.UserName} commented on TKT-{ticket.Id:D4}"
+            );
+        }
 
         await _db.SaveChangesAsync();
 
@@ -306,10 +339,10 @@ public class TicketsController : ControllerBase
     }
     // ── POST /api/tickets/{id}/attachments ─────────────────────
     [HttpPost("{id}/attachments")]
-    public async Task<IActionResult> AddAttachment(int id, [FromBody] AddAttachmentRequest req)
+    public async Task<IActionResult> AddAttachment(int id, [FromForm] IFormFile file)
     {
-        if (req is null || string.IsNullOrWhiteSpace(req.FileName))
-            return BadRequest(new { message = "File name is required." });
+        if (file == null || file.Length == 0)
+            return BadRequest(new { message = "No file provided." });
 
         if (!int.TryParse(User.FindFirst("sub")?.Value, out var userId))
             return Unauthorized();
@@ -317,10 +350,15 @@ public class TicketsController : ControllerBase
         var ticket = await _db.Tickets.FindAsync(id);
         if (ticket == null) return NotFound();
 
+        using var ms = new MemoryStream();
+        await file.CopyToAsync(ms);
+
         var attachment = new TicketAttachment
         {
             TicketId = id,
-            FileName = req.FileName,
+            FileName = file.FileName,
+            ContentType = file.ContentType,
+            Content = ms.ToArray(),
             UploadedById = userId,
         };
         _db.TicketAttachments.Add(attachment);
@@ -331,7 +369,7 @@ public class TicketsController : ControllerBase
             TicketId = id,
             UserId = userId,
             EventType = "Attachment",
-            Action = $"{uploader?.UserName} added attachment \"{req.FileName}\"",
+            Action = $"{uploader?.UserName} added attachment \"{file.FileName}\"",
             Timestamp = DateTime.UtcNow,
         });
 
@@ -341,11 +379,12 @@ public class TicketsController : ControllerBase
         {
             attachment.Id,
             attachment.FileName,
+            attachment.ContentType,
             UploadedByName = uploader?.UserName,
         });
     }
 
-    // ── GET /api/tickets/{id}/attachments ───────────────────────
+    // ── GET /api/tickets/{id}/attachments — list (no bytes) ──
     [HttpGet("{id}/attachments")]
     public async Task<IActionResult> GetAttachments(int id)
     {
@@ -359,11 +398,24 @@ public class TicketsController : ControllerBase
         {
             a.Id,
             a.FileName,
+            a.ContentType,
             UploadedByName = a.UploadedBy?.UserName,
         }));
     }
 
-    public record AddAttachmentRequest(string FileName);
+    // ── GET /api/tickets/attachments/{attachmentId}/view — opens the file ──
+    [HttpGet("attachments/{attachmentId}/view")]
+    public async Task<IActionResult> ViewAttachment(int attachmentId)
+    {
+        var attachment = await _db.TicketAttachments.FindAsync(attachmentId);
+        if (attachment == null || attachment.Content == null) return NotFound();
+
+        // returning with the original content type lets the browser render
+        // images/PDFs inline instead of forcing a download
+        return File(attachment.Content, attachment.ContentType ?? "application/octet-stream");
+    }
+
+    
 
 
     public record AssignRequest(int UserId);

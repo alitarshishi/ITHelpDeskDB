@@ -1,9 +1,9 @@
 using ITHelpDeskDb.Data;
 using ITHelpDeskDb.Models;
+using ITHelpDeskDb.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using ITHelpDeskDb.Models.DTOs.Requests;
 
 namespace ITHelpDeskDb.Controllers.Api;
 
@@ -13,8 +13,13 @@ namespace ITHelpDeskDb.Controllers.Api;
 public class ManagerController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly NotificationService _notifier;
 
-    public ManagerController(AppDbContext db) => _db = db;
+    public ManagerController(AppDbContext db, NotificationService notifier)
+    {
+        _db = db;
+        _notifier = notifier;
+    }
 
     // ── GET /api/manager/team-tickets ──────────────────
     [HttpGet("team-tickets")]
@@ -25,11 +30,11 @@ public class ManagerController : ControllerBase
         var tickets = await _db.Tickets
             .Include(t => t.SubmittedBy)
             .Include(t => t.AssignedTo)
+            .Include(t => t.AssignedByManager)
             .Include(t => t.Priority)
             .Include(t => t.Category)
             .Include(t => t.Status)
-            .Where(t => t.AssignedToId == managerId      // assigned TO manager
-                     || t.AssignedByManagerId == managerId) // OR assigned BY manager to agent
+            .Where(t => t.AssignedToId == managerId || t.AssignedByManagerId == managerId)
             .OrderByDescending(t => t.DateCreated)
             .ToListAsync();
 
@@ -45,30 +50,40 @@ public class ManagerController : ControllerBase
             AssignedToName = t.AssignedTo?.UserName,
             AssignedToId = t.AssignedToId,
             SubmittedByName = t.SubmittedBy?.UserName,
+            AssignedByManagerName = t.AssignedByManager?.UserName,
             AssignedByManagerId = t.AssignedByManagerId,
         }));
     }
-    
 
-    //  PATCH /api/manager/{id}/update 
+ 
+
+
+    // ── PATCH /api/manager/{id}/update ────────────────
     [HttpPatch("{id}/update")]
     public async Task<IActionResult> UpdateTicket(int id, [FromBody] ManagerUpdateRequest req)
     {
         var managerId = int.Parse(User.FindFirst("sub")!.Value);
         var manager = await _db.Users.FindAsync(managerId);
-        var ticket = await _db.Tickets.FindAsync(id);
+
+        var ticket = await _db.Tickets
+                              .Include(t => t.Status)
+                              .Include(t => t.AssignedTo)
+                              .FirstOrDefaultAsync(t => t.Id == id);
         if (ticket == null) return NotFound();
 
-        if (req.PriorityId != null) ticket.PriorityId = req.PriorityId.Value;
-        if (req.AssignedToId != null)
-        {
-            ticket.AssignedToId = req.AssignedToId;
-            ticket.AssignedByManagerId = managerId; 
-        }
+        if (req.PriorityId != null)
+            ticket.PriorityId = req.PriorityId.Value;
+
+        // ── Status change — capture the name BEFORE any mutation ──
         if (req.StatusId != null && req.StatusId != ticket.StatusId)
         {
+            var currentStatusName = ticket.Status?.Name ?? "Unknown";
+
+            if (currentStatusName != "Open" && currentStatusName != "Resolved" && currentStatusName != "Escalated")
+                return BadRequest(new { message = "Manager can only change status when the ticket is Open,Resolved or Escalated." });
+
             var newStatus = await _db.Statuses.FindAsync(req.StatusId);
-            var oldStatus = ticket.Status?.Name ?? "Unknown";
+            if (newStatus == null) return BadRequest(new { message = "Invalid status." });
 
             ticket.StatusId = req.StatusId.Value;
 
@@ -76,16 +91,29 @@ public class ManagerController : ControllerBase
             {
                 TicketId = ticket.Id,
                 UserId = managerId,
-                EventType = req.StatusId == 4 ? "Closed" : "StatusChanged",
-                Action = $"Status changed from {oldStatus} to {newStatus?.Name} by {manager?.UserName}",
+                EventType = newStatus.Name == "Closed" ? "Closed" : "StatusChanged",
+                Action = $"Status changed from {currentStatusName} to {newStatus.Name} by {manager?.UserName}",
                 Timestamp = DateTime.UtcNow,
             });
+            if (newStatus.Name == "Closed")
+            {
+                await _notifier.NotifyAsync(
+                    ticket.SubmittedById,
+                    ticket.Id,
+                    "Closed",
+                    $"Your ticket TKT-{ticket.Id:D4} was closed"
+                );
+            }
+
+
         }
 
-        
+        // ── Reassign / first-time assign ──────────────────
         if (req.AssignedToId != null && req.AssignedToId != ticket.AssignedToId)
         {
             var newAgent = await _db.Users.FindAsync(req.AssignedToId);
+            var wasUnassigned = ticket.AssignedToId == null;
+            var oldAgentId = ticket.AssignedToId;
             var oldAgentName = ticket.AssignedTo?.UserName ?? "Unassigned";
 
             ticket.AssignedToId = req.AssignedToId;
@@ -95,17 +123,34 @@ public class ManagerController : ControllerBase
             {
                 TicketId = ticket.Id,
                 UserId = managerId,
-                EventType = "Reassigned",
-                Action = $"Ticket reassigned from {oldAgentName} to {newAgent?.UserName} by {manager?.UserName}",
+                EventType = wasUnassigned ? "Assigned" : "Reassigned",
+                Action = wasUnassigned
+                    ? $"Ticket assigned to {newAgent?.UserName} by {manager?.UserName}"
+                    : $"Ticket reassigned from {oldAgentName} to {newAgent?.UserName} by {manager?.UserName}",
                 Timestamp = DateTime.UtcNow,
             });
+            await _notifier.NotifyAsync(
+                req.AssignedToId.Value,
+                ticket.Id,
+                "Assigned",
+                $"You were assigned TKT-{ticket.Id:D4}"
+                );
+
+            if (!wasUnassigned && oldAgentId != null)
+            {
+                await _notifier.NotifyAsync(
+                    oldAgentId.Value,
+                    ticket.Id,
+                    "Reassigned",
+                    $"TKT-{ticket.Id:D4} was reassigned to someone else"
+                );
+            }
         }
 
         await _db.SaveChangesAsync();
         return NoContent();
     }
 
-    //  GET /api/manager/reports/status-counts 
     [HttpGet("reports/status-counts")]
     public async Task<IActionResult> StatusCounts()
     {
@@ -117,7 +162,6 @@ public class ManagerController : ControllerBase
         return Ok(counts);
     }
 
-    //  GET /api/manager/reports/avg-resolution-hours 
     [HttpGet("reports/avg-resolution-hours")]
     public async Task<IActionResult> AverageResolutionHours()
     {
@@ -136,3 +180,4 @@ public class ManagerController : ControllerBase
     }
 }
 
+public record ManagerUpdateRequest(int? PriorityId, int? AssignedToId, int? StatusId);

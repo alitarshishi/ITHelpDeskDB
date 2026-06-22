@@ -11,6 +11,9 @@ public class Ticket
     public int SubmittedById { get; set; }
     public User SubmittedBy { get; set; } = null!;
 
+    public int? AssignedByManagerId { get; set; }
+    public User? AssignedByManager { get; set; }
+
     public int? AssignedToId { get; set; }
     public User? AssignedTo { get; set; }
 
@@ -23,8 +26,7 @@ public class Ticket
     public int StatusId { get; set; }
     public Status Status { get; set; } = null!;
 
-    public int? AssignedByManagerId { get; set; }
-    public User? AssignedByManager { get; set; }
+    
 
     public ICollection<TicketComment> Comments { get; set; } = new List<TicketComment>();
     public ICollection<TicketAttachment> Attachments { get; set; } = new List<TicketAttachment>();

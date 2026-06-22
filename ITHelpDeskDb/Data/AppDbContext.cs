@@ -83,6 +83,17 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(t => t.AssignedByManagerId)
             .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<Notification>()
+            .HasOne(n => n.Recipient)
+            .WithMany()
+            .HasForeignKey(n => n.RecipientId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<Notification>()
+            .HasOne(n => n.Ticket)
+            .WithMany(t => t.Notifications)
+            .HasForeignKey(n => n.TicketId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         // Seed some basic lookup data and test users + tickets
         modelBuilder.Entity<Role>().HasData(
@@ -112,7 +123,8 @@ public class AppDbContext : DbContext
             new Status { Id = 1, Name = "Open" },
             new Status { Id = 2, Name = "In Progress" },
             new Status { Id = 3, Name = "Resolved" },
-            new Status { Id = 4, Name = "Closed" }
+            new Status { Id = 4, Name = "Closed" },
+            new Status { Id = 5, Name = "Escalated" }
         );
 
         // Create deterministic seeded users (Admin, Employee, ITAgent, Manager)

@@ -8,4 +8,5 @@ public record CreateTicketRequest(
     int StatusId,
     int SubmittedById,
     int? AssignedToId
+    
 );

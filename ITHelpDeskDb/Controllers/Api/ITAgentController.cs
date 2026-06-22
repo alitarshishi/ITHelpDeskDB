@@ -1,9 +1,10 @@
 using ITHelpDeskDb.Data;
 using ITHelpDeskDb.Models;
+using ITHelpDeskDb.Models.DTOs.Responses;
+using ITHelpDeskDb.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using ITHelpDeskDb.Models.DTOs.Responses;
 
 namespace ITHelpDeskDb.Controllers.Api;
 
@@ -13,8 +14,12 @@ namespace ITHelpDeskDb.Controllers.Api;
 public class ITAgentController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly NotificationService _notifier;
 
-    public ITAgentController(AppDbContext db) => _db = db;
+    public ITAgentController(AppDbContext db, NotificationService notifier) {
+        _db = db;
+        _notifier = notifier;
+    }
 
     [HttpGet("assigned")]
     public async Task<IActionResult> GetAssigned()
@@ -52,65 +57,6 @@ public class ITAgentController : ControllerBase
         }));
     }
 
-    [HttpPost("{id}/resolve")]
-    public async Task<IActionResult> ResolveTicket(int id, [FromBody] ResolveRequest? req)
-    {
-        if (!int.TryParse(User.FindFirst("sub")?.Value, out var myId))  
-            return Unauthorized();
-
-        var ticket = await _db.Tickets.FindAsync(id);
-        if (ticket == null) return NotFound();
-        if (ticket.AssignedToId != myId) return Forbid();
-
-        if (ticket.DateResolved == null)
-            ticket.DateResolved = DateTime.UtcNow;
-
-        if (req?.StatusId != null)
-            ticket.StatusId = req.StatusId.Value;
-
-        _db.ActivityLogs.Add(new ActivityLog
-        {
-            Action = $"Ticket #{ticket.Id} resolved by agent {myId}",
-            Timestamp = DateTime.UtcNow,
-            TicketId = ticket.Id,
-            UserId = myId
-        });
-
-        await _db.SaveChangesAsync();
-        return NoContent();
-    }
-
-    [HttpPost("{id}/comment")]
-    public async Task<IActionResult> AddComment(int id, [FromBody] CommentRequest req)
-    {
-        if (req is null || string.IsNullOrWhiteSpace(req.Text)) return BadRequest();
-        if (!int.TryParse(User.FindFirst("sub")?.Value, out var myId))  // ✅ fixed
-            return Unauthorized();
-
-        var ticket = await _db.Tickets.FindAsync(id);
-        if (ticket == null) return NotFound();
-        if (ticket.AssignedToId != myId) return Forbid();
-
-        var comment = new TicketComment
-        {
-            TicketId = ticket.Id,
-            Text = req.Text,
-            CreatedAt = DateTime.UtcNow,
-            AuthorId = myId
-        };
-
-        _db.TicketComments.Add(comment);
-        _db.ActivityLogs.Add(new ActivityLog
-        {
-            Action = $"Agent {myId} commented on ticket #{ticket.Id}",
-            Timestamp = DateTime.UtcNow,
-            TicketId = ticket.Id,
-            UserId = myId
-        });
-
-        await _db.SaveChangesAsync();
-        return CreatedAtAction(null, new { id = comment.Id }, comment);
-    }
     // ── PATCH /api/itagent/{id}/status — agent marks Resolved ──
     [HttpPatch("{id}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] AgentStatusRequest req)
@@ -143,6 +89,46 @@ public class ITAgentController : ControllerBase
             Action = $"Status changed from {oldStatusName} to {newStatus.Name} by {agent?.UserName}",
             Timestamp = DateTime.UtcNow,
         });
+        if (ticket.AssignedByManagerId != null &&
+        (newStatus.Name == "Resolved" || newStatus.Name == "Escalated"))
+            {
+                await _notifier.NotifyAsync(
+                    ticket.AssignedByManagerId.Value,
+                    ticket.Id,
+                    newStatus.Name,
+                    newStatus.Name == "Resolved"
+                        ? $"TKT-{ticket.Id:D4} was resolved by {agent?.UserName}"
+                     : $"TKT-{ticket.Id:D4} was escalated by {agent?.UserName}"
+            );
+        }
+
+        await _db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    [HttpPost("{id}/note")]
+    public async Task<IActionResult> AddNote(int id, [FromBody] AgentNoteRequest req)
+    {
+        if (req is null || string.IsNullOrWhiteSpace(req.Text))
+            return BadRequest(new { message = "Note text is required." });
+
+        if (!int.TryParse(User.FindFirst("sub")?.Value, out var myId))
+            return Unauthorized();
+
+        var ticket = await _db.Tickets.FindAsync(id);
+        if (ticket == null) return NotFound();
+        if (ticket.AssignedToId != myId) return Forbid();
+
+        var agent = await _db.Users.FindAsync(myId);
+
+        _db.ActivityLogs.Add(new ActivityLog
+        {
+            TicketId = id,
+            UserId = myId,
+            EventType = "AgentNote",
+            Action = $"{agent?.UserName}: {req.Text}",
+            Timestamp = DateTime.UtcNow,
+        });
 
         await _db.SaveChangesAsync();
         return NoContent();
@@ -152,6 +138,6 @@ public class ITAgentController : ControllerBase
 
 }
 
-public record ResolveRequest(int? StatusId);
-public record CommentRequest(string Text);
+
 public record AgentStatusRequest(int StatusId);
+public record AgentNoteRequest(string Text);
