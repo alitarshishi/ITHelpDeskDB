@@ -1,68 +1,32 @@
-using ITHelpDeskDb.Data;
-using ITHelpDeskDb.Models;
-using ITHelpDeskDb.Models.DTOs.Requests;   // 👈 add
-using ITHelpDeskDb.Models.DTOs.Responses;  // 👈 add
+using ITHelpDeskDb.Models.DTOs.Requests;
+using ITHelpDeskDb.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-
-namespace ITHelpDeskDb.Controllers.Api;
 
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 public class UsersController : ControllerBase
 {
-    private readonly AppDbContext _db;
-    public UsersController(AppDbContext db) => _db = db;
+    private readonly UserService _users;
+    public UsersController(UserService users) => _users = users;
 
-    //  GET /api/users 
+    // GET /api/users
     [HttpGet]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> GetAll()
-    {
-        var users = await _db.Users
-            .Include(u => u.Role)
-            .ToListAsync();
+    public async Task<IActionResult> GetAll() =>
+        Ok(await _users.GetAllAsync());
 
-        return Ok(users.Select(u => new UserResponse
-        {
-            Id = u.Id,
-            UserName = u.UserName,
-            Email = u.Email,
-            Role = u.Role?.Name,
-            IsActive = u.IsActive,
-            CreatedBy = u.CreatedBy,
-            CreatedDate = u.CreatedDate,
-            UpdatedBy = u.UpdatedBy,
-            UpdatedDate = u.UpdatedDate,
-        }));
-    }
-
-    //  GET /api/users/{id} 
+    // get/api/users/{id} for a specific user
     [HttpGet("{id}")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> Get(int id)
     {
-        var u = await _db.Users
-            .Include(x => x.Role)
-            .FirstOrDefaultAsync(x => x.Id == id);
-
-        if (u == null) return NotFound();
-
-        return Ok(new UserResponse
-        {
-            Id = u.Id,
-            UserName = u.UserName,
-            Email = u.Email,
-            Role = u.Role?.Name,
-            IsActive = u.IsActive,
-            CreatedBy = u.CreatedBy,
-            CreatedDate = u.CreatedDate,
-            UpdatedBy = u.UpdatedBy,
-            UpdatedDate = u.UpdatedDate,
-        });
+        var user = await _users.GetByIdAsync(id);
+        return user == null ? NotFound() : Ok(user);
     }
+
+
 
     // POST /api/users 
     [HttpPost]
@@ -70,56 +34,22 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreateUserRequest req)
     {
         var adminName = User.FindFirst("name")?.Value ?? "Admin";
-
-        var user = new User
-        {
-            UserName = req.UserName,
-            Email = req.Email,
-            RoleId = req.RoleId,
-            IsActive = true,
-            CreatedBy = adminName,
-            CreatedDate = DateTime.UtcNow,
-        };
-        user.SetPassword(req.Password);
-        _db.Users.Add(user);
-        await _db.SaveChangesAsync();
-
-        return CreatedAtAction(nameof(Get), new { id = user.Id }, new UserResponse
-        {
-            Id = user.Id,
-            UserName = user.UserName,
-            Email = user.Email,
-            Role = null, // role not loaded yet
-            IsActive = true,
-        });
+        var result = await _users.CreateAsync(req, adminName);
+        return CreatedAtAction(nameof(Get), new { id = result.Id }, result);
     }
+
 
     // DELETE /api/users/{id}
     [HttpDelete("{id}")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> Delete(int id)
     {
-        var user = await _db.Users
-            .Include(u => u.SubmittedTickets)
-            .Include(u => u.AssignedTickets)
-            .Include(u => u.Comments)
-            .Include(u => u.ActivityLogs)
-            .Include(u => u.UploadedAttachments)
-            .FirstOrDefaultAsync(u => u.Id == id);
+        if (!await _users.ExistsAsync(id)) return NotFound();
 
-        if (user == null) return NotFound();
+        var deleted = await _users.DeleteAsync(id);
+        if (!deleted)
+            return Conflict(new { message = "User has attached data. Use Deactivate instead." });
 
-        bool hasData = user.SubmittedTickets.Any()
-                    || user.AssignedTickets.Any()
-                    || user.Comments.Any()
-                    || user.ActivityLogs.Any()
-                    || user.UploadedAttachments.Any();
-
-        if (hasData)
-            return Conflict(new { message = "User has attached data. Use Deactivate instead.", canDelete = false });
-
-        _db.Users.Remove(user);
-        await _db.SaveChangesAsync();
         return NoContent();
     }
 
@@ -129,15 +59,8 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Deactivate(int id)
     {
         var adminName = User.FindFirst("name")?.Value ?? "Admin";
-        var user = await _db.Users.FindAsync(id);
-        if (user == null) return NotFound();
-
-        user.IsActive = false;
-        user.UpdatedBy = adminName;
-        user.UpdatedDate = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
-        return Ok(new { message = $"{user.UserName} has been deactivated." });
+        var userName = await _users.SetActiveAsync(id, false, adminName);
+        return userName == null ? NotFound() : Ok(new { message = $"{userName} has been deactivated." });
     }
 
     //  PUT /api/users/{id}/activate 
@@ -146,15 +69,8 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Activate(int id)
     {
         var adminName = User.FindFirst("name")?.Value ?? "Admin";
-        var user = await _db.Users.FindAsync(id);
-        if (user == null) return NotFound();
-
-        user.IsActive = true;
-        user.UpdatedBy = adminName;
-        user.UpdatedDate = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
-        return Ok(new { message = $"{user.UserName} has been activated." });
+        var userName = await _users.SetActiveAsync(id, true, adminName);
+        return userName == null ? NotFound() : Ok(new { message = $"{userName} has been activated." });
     }
 
     //  PUT /api/users/{id}/role 
@@ -163,48 +79,18 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> ChangeRole(int id, [FromBody] ChangeRoleRequest req)
     {
         var adminName = User.FindFirst("name")?.Value ?? "Admin";
-        var user = await _db.Users
-            .Include(u => u.Role)
-            .FirstOrDefaultAsync(u => u.Id == id);
-
-        if (user == null) return NotFound();
-
-        var role = await _db.Roles.FindAsync(req.RoleId);
-        if (role == null) return BadRequest(new { message = "Invalid role." });
-
-        user.RoleId = req.RoleId;
-        user.UpdatedBy = adminName;
-        user.UpdatedDate = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
-        return Ok(new { message = $"{user.UserName}'s role changed to {role.Name}." });
+        var (success, message) = await _users.ChangeRoleAsync(id, req.RoleId, adminName);
+        return success ? Ok(new { message }) : BadRequest(new { message });
     }
 
     //  GET /api/users/managers 
     [HttpGet("managers")]
-    [Authorize]
-    public async Task<IActionResult> GetManagers()
-    {
-        var managers = await _db.Users
-            .Include(u => u.Role)
-            .Where(u => u.Role.Name == "Manager" && u.IsActive)
-            .Select(u => new { u.Id, u.UserName })
-            .ToListAsync();
+    public async Task<IActionResult> GetManagers() =>
+        Ok(await _users.GetManagersAsync());
 
-        return Ok(managers);
-    }
 
     //  GET /api/users/itagents 
     [HttpGet("itagents")]
-    [Authorize]
-    public async Task<IActionResult> GetItAgents()
-    {
-        var agents = await _db.Users
-            .Include(u => u.Role)
-            .Where(u => u.Role.Name == "ITAgent" && u.IsActive)
-            .Select(u => new { u.Id, u.UserName })
-            .ToListAsync();
-
-        return Ok(agents);
-    }
+    public async Task<IActionResult> GetItAgents() =>
+        Ok(await _users.GetItAgentsAsync());
 }

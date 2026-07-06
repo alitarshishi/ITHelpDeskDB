@@ -1,7 +1,6 @@
-﻿using ITHelpDeskDb.Data;
+﻿using ITHelpDeskDb.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace ITHelpDeskDb.Controllers.Api;
 
@@ -10,58 +9,45 @@ namespace ITHelpDeskDb.Controllers.Api;
 [Authorize]
 public class NotificationsController : ControllerBase
 {
-    private readonly AppDbContext _db;
-    public NotificationsController(AppDbContext db) => _db = db;
+    private readonly NotificationQueryService _notifications;
+    public NotificationsController(NotificationQueryService notifications)
+        => _notifications = notifications;
 
     [HttpGet]
     public async Task<IActionResult> GetMine()
     {
         var userId = int.Parse(User.FindFirst("sub")!.Value);
-
-        var notifications = await _db.Notifications
-            .Where(n => n.RecipientId == userId)
-            .OrderByDescending(n => n.CreatedAt)
-            .Take(50)
-            .ToListAsync();
-
-        return Ok(notifications.Select(n => new
-        {
-            n.Id,
-            n.Message,
-            n.CreatedAt,
-            n.IsRead,
-            n.TicketId,
-            n.Trigger,
-        }));
+        return Ok(await _notifications.GetMineAsync(userId));
     }
 
     [HttpGet("unread-count")]
     public async Task<IActionResult> UnreadCount()
     {
         var userId = int.Parse(User.FindFirst("sub")!.Value);
-        var count = await _db.Notifications.CountAsync(n => n.RecipientId == userId && !n.IsRead);
-        return Ok(new { count });
+        return Ok(new { count = await _notifications.GetUnreadCountAsync(userId) });
     }
 
     [HttpPut("{id}/read")]
     public async Task<IActionResult> MarkRead(int id)
     {
         var userId = int.Parse(User.FindFirst("sub")!.Value);
-        var notif = await _db.Notifications.FirstOrDefaultAsync(n => n.Id == id && n.RecipientId == userId);
-        if (notif == null) return NotFound();
-
-        notif.IsRead = true;
-        await _db.SaveChangesAsync();
-        return NoContent();
+        var found = await _notifications.MarkReadAsync(id, userId);
+        return found ? NoContent() : NotFound();
     }
 
     [HttpPut("read-all")]
     public async Task<IActionResult> MarkAllRead()
     {
         var userId = int.Parse(User.FindFirst("sub")!.Value);
-        var unread = await _db.Notifications.Where(n => n.RecipientId == userId && !n.IsRead).ToListAsync();
-        foreach (var n in unread) n.IsRead = true;
-        await _db.SaveChangesAsync();
+        await _notifications.MarkAllReadAsync(userId);
+        return NoContent();
+    }
+
+    [HttpDelete("clear-all")]
+    public async Task<IActionResult> ClearAll()
+    {
+        var userId = int.Parse(User.FindFirst("sub")!.Value);
+        await _notifications.ClearAllAsync(userId);
         return NoContent();
     }
 }

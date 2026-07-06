@@ -1,14 +1,7 @@
-using ITHelpDeskDb.Data;
-using ITHelpDeskDb.Models;
 using ITHelpDeskDb.Models.DTOs.Requests;
-using ITHelpDeskDb.Models.DTOs.Responses;
+using ITHelpDeskDb.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
 
 namespace ITHelpDeskDb.Controllers.Api;
 
@@ -16,81 +9,61 @@ namespace ITHelpDeskDb.Controllers.Api;
 [Route("api/[controller]")]
 public class AuthController : ControllerBase
 {
-    private readonly AppDbContext _db;
-    private readonly IConfiguration _config;
+    private readonly AuthService _auth;
+    private readonly PasswordResetService _passwordReset;
 
-    public AuthController(AppDbContext db, IConfiguration config)
+    public AuthController(AuthService auth, PasswordResetService passwordReset)
     {
-        _db = db;
-        _config = config;
+        _auth = auth;
+        _passwordReset = passwordReset;
     }
 
     [HttpPost("login")]
-    public IActionResult Login([FromBody] LoginRequest req)
+    public async Task<IActionResult> Login([FromBody] LoginRequest req)
     {
         if (req is null || string.IsNullOrEmpty(req.Email) || string.IsNullOrEmpty(req.Password))
             return BadRequest();
 
-        //  Include Role so user.Role.Name is available
-        var user = _db.Users
-                      .Include(u => u.Role)
-                      .FirstOrDefault(u => u.Email == req.Email);
+        var result = await _auth.LoginAsync(req.Email, req.Password);
 
-        if (user == null || !user.VerifyPassword(req.Password))
-            return Unauthorized();
+        if (!result.Success)
+            return Unauthorized(new { message = result.Error });
 
-        var jwtKey = _config["Jwt:Key"] ?? "ChangeThisDefaultKeyToSomethingSecure";
-        var jwtIssuer = _config["Jwt:Issuer"] ?? "ITHelpDeskDb";
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
-        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-
-        var roleName = user.Role?.Name ?? string.Empty;
-
-        var claims = new List<Claim>
+        return Ok(new
         {
-            new Claim("sub",   user.Id.ToString()),
-            new Claim("name",  user.UserName ?? string.Empty),
-            new Claim("email", user.Email    ?? string.Empty),
-            new Claim("role",  roleName),
-        };
-
-        var token = new JwtSecurityToken(
-            issuer: jwtIssuer,
-            
-            claims: claims,
-            expires: DateTime.UtcNow.AddHours(8),
-            signingCredentials: creds);
-
-        string redirectUrl = roleName switch
-        {
-            "Admin" => "/admin/dashboard",
-            "Employee" => "/employee/dashboard",
-            "Manager" => "/manager/dashboard",
-            "IT Agent" => "/itagent/dashboard",   
-            _ => "/"
-        };
-
-        return Ok(new AuthResponse
-        {
-            Token = new JwtSecurityTokenHandler().WriteToken(token),
-            Role = roleName,
-            RedirectUrl = redirectUrl,
-            User = new UserResponse
-            {
-                Id = user.Id,
-                UserName = user.UserName,
-                Email = user.Email,
-                Role = roleName,
-            }
+            token = result.Token,
+            role = result.Role,
+            redirectUrl = result.RedirectUrl,
+            user = result.User,
         });
     }
+
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest req)
+    {
+        if (req is null || string.IsNullOrEmpty(req.Email))
+            return BadRequest(new { message = "Email is required." });
+
+        var (_, message) = await _passwordReset.RequestResetAsync(req.Email);
+
+        // Always return 200 — never reveal whether email exists (security best practice)
+        return Ok(new { message });
+    }
+
+    [HttpPost("reset-password")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest req)
+    {
+        if (req is null || string.IsNullOrEmpty(req.Token) || string.IsNullOrEmpty(req.NewPassword))
+            return BadRequest(new { message = "Token and new password are required." });
+
+        var (success, message) = await _passwordReset.ResetPasswordAsync(req.Token, req.NewPassword);
+
+        return success ? Ok(new { message }) : BadRequest(new { message });
+    }
+
     [HttpPost("logout")]
     [Authorize]
-    public IActionResult Logout()
-    {
-        
-        return NoContent();
-    }
+    public IActionResult Logout() => NoContent();
 }
 
 public record LoginRequest(string Email, string Password);

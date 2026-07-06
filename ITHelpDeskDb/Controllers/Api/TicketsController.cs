@@ -1,12 +1,7 @@
-using ITHelpDeskDb.Data;
-using ITHelpDeskDb.Models;
 using ITHelpDeskDb.Models.DTOs.Requests;
-using ITHelpDeskDb.Models.DTOs.Responses;
 using ITHelpDeskDb.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-
 namespace ITHelpDeskDb.Controllers.Api;
 
 [ApiController]
@@ -14,235 +9,71 @@ namespace ITHelpDeskDb.Controllers.Api;
 [Authorize]
 public class TicketsController : ControllerBase
 {
-    private readonly AppDbContext _db;
-    private readonly NotificationService _notifier;
+    private readonly TicketService _tickets;
+    private readonly UserService _users;
 
-    public TicketsController(AppDbContext db, NotificationService notifier)
+    public TicketsController(TicketService tickets, UserService users)
     {
-        _db = db;
-        _notifier = notifier;
+        _tickets = tickets;
+        _users = users;
     }
 
-    [HttpGet]
-    public async Task<IActionResult> GetAll()
-    {
-        var tickets = await _db.Tickets
-            .Include(t => t.SubmittedBy)
-            .Include(t => t.AssignedTo)
-            .Include(t => t.AssignedByManager)
-            .Include(t => t.Priority)
-            .Include(t => t.Category)
-            .Include(t => t.Status)
-            .OrderByDescending(t => t.DateCreated)
-            .ToListAsync();
-
-        return Ok(tickets.Select(t => new TicketResponse
-        {
-            Id = t.Id,
-            Title = t.Title,
-            Description = t.Description,
-            DateCreated = t.DateCreated,
-            DateResolved = t.DateResolved,
-            StatusName = t.Status?.Name,
-            PriorityName = t.Priority?.Name,
-            CategoryName = t.Category?.Name,
-            AssignedToName = t.AssignedTo?.UserName,
-            AssignedToId = t.AssignedToId,
-            SubmittedByName = t.SubmittedBy?.UserName,
-            SubmittedById = t.SubmittedById,
-            AssignedByManagerName = t.AssignedByManager?.UserName,
-            AssignedByManagerId = t.AssignedByManagerId,
-        }));
-    }
-
+[HttpGet]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> GetAll() =>
+        Ok(await _tickets.GetAllAsync());
 
     [HttpGet("{id}")]
     public async Task<IActionResult> Get(int id)
     {
-        var t = await _db.Tickets
-            .Include(t => t.SubmittedBy)
-            .Include(t => t.AssignedTo)
-            .Include(t => t.AssignedByManager)
-            .Include(t => t.Priority)
-            .Include(t => t.Category)
-            .Include(t => t.Status)
-            .FirstOrDefaultAsync(t => t.Id == id);
-        if (t == null) return NotFound();
-        return Ok(new TicketResponse
-        {
-            Id = t.Id,
-            Title = t.Title,
-            Description = t.Description,
-            DateCreated = t.DateCreated,
-            DateResolved = t.DateResolved,
-            StatusName = t.Status?.Name,
-            PriorityName = t.Priority?.Name,
-            CategoryName = t.Category?.Name,
-            AssignedToName = t.AssignedTo?.UserName,
-            AssignedToId = t.AssignedToId,
-            SubmittedByName = t.SubmittedBy?.UserName,
-            SubmittedById = t.SubmittedById,
-            AssignedByManagerName = t.AssignedByManager?.UserName,
-            AssignedByManagerId = t.AssignedByManagerId,
-        });
+        var ticket = await _tickets.GetByIdAsync(id);
+        return ticket == null ? NotFound() : Ok(ticket);
     }
-    
+
+    [HttpGet("my")]
+    public async Task<IActionResult> GetMine()
+    {
+        var userId = int.Parse(User.FindFirst("sub")!.Value);
+        return Ok(await _tickets.GetBySubmitterAsync(userId));
+    }
+
+
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateTicketRequest req)
     {
         if (req == null) return BadRequest();
-
-        var ticket = new Ticket
-        {
-            Title = req.Title,
-            Description = req.Description,
-            CategoryId = req.CategoryId,
-            PriorityId = req.PriorityId,
-            StatusId = req.StatusId,
-            SubmittedById = req.SubmittedById,
-            AssignedToId = null,                 
-            AssignedByManagerId = req.AssignedToId,
-            DateCreated = DateTime.UtcNow,
-        };
-
-        _db.Tickets.Add(ticket);
-        await _db.SaveChangesAsync();
-        var submitter = await _db.Users.FindAsync(req.SubmittedById);
-        _db.ActivityLogs.Add(new ActivityLog
-        {
-            TicketId = ticket.Id,
-            UserId = req.SubmittedById,
-            EventType = "Created",
-            Action = $"Ticket created by {submitter?.UserName}",
-            Timestamp = DateTime.UtcNow,
-        });
-        if (req.AssignedToId != null) // the manager picked at creation
-        {
-            await _notifier.NotifyAsync(
-                req.AssignedToId.Value,
-                ticket.Id,
-                "TicketCreated",
-                $"New ticket TKT-{ticket.Id:D4} created by {submitter?.UserName}"
-            );
-        }
-        await _db.SaveChangesAsync();
-        return CreatedAtAction(nameof(Get), new { id = ticket.Id }, new { ticket.Id });
+        var submitterName = await _users.GetUserNameAsync(req.SubmittedById) ?? "Unknown";
+        var id = await _tickets.CreateAsync(req, submitterName);
+        return CreatedAtAction(nameof(Get), new { id }, new { id });
     }
 
     [HttpPut("{id}")]
-    public async Task<IActionResult> Update(int id, [FromBody] Ticket update)
+    public async Task<IActionResult> Update(int id, [FromBody] UpdateTicketRequest req)
     {
-        var ticket = await _db.Tickets.FindAsync(id);
-        if (ticket == null) return NotFound();
-
-        ticket.Title = update.Title;
-        ticket.Description = update.Description;
-        ticket.PriorityId = update.PriorityId;
-        ticket.CategoryId = update.CategoryId;
-        ticket.StatusId = update.StatusId;
-        ticket.AssignedToId = update.AssignedToId;
-
-        await _db.SaveChangesAsync();
-        return NoContent();
+        var updated = await _tickets.UpdateAsync(id, req);
+        return updated ? NoContent() : NotFound();
     }
 
-    [HttpPatch("{id}/assign")]
-    [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> Assign(int id, [FromBody] AssignRequest req)
-    {
-        var ticket = await _db.Tickets.FindAsync(id);
-        if (ticket == null) return NotFound();
-
-        ticket.AssignedToId = req.UserId;
-        await _db.SaveChangesAsync();
-        return NoContent();
-    }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)
     {
         var userId = int.Parse(User.FindFirst("sub")!.Value);
-        var role = User.FindFirst("role")?.Value;
+        var role = User.FindFirst("role")?.Value ?? "";
 
-        var ticket = await _db.Tickets
-                              .Include(t => t.Status)
-                              .FirstOrDefaultAsync(t => t.Id == id);
-
-        if (ticket == null) return NotFound();
-
-        // Admin can delete anything
-        // Employee can only delete their own Open tickets
-        if (role != "Admin")
-        {
-            if (ticket.SubmittedById != userId)
-                return Forbid();
-
-            if ((ticket.Status?.Name ?? "").ToLower() != "open")
-                return BadRequest(new { message = "You can only delete tickets with Open status." });
-        }
-
-        _db.Tickets.Remove(ticket);
-        await _db.SaveChangesAsync();
+        var (found, allowed, message) = await _tickets.DeleteAsync(id, userId, role);
+        if (!found) return NotFound();
+        if (!allowed) return message == "Forbidden" ? Forbid() : BadRequest(new { message });
         return NoContent();
-    }
-    [HttpGet("my")]
-    public async Task<IActionResult> GetMine()
-    {
-        var userId = int.Parse(User.FindFirst("sub")!.Value);
-
-        var tickets = await _db.Tickets
-            .Include(t => t.Status)
-            .Include(t => t.Priority)
-            .Include(t => t.Category)
-            .Include(t => t.AssignedTo)
-            .Include(t => t.AssignedByManager)   
-            .Include(t => t.SubmittedBy)
-            .Where(t => t.SubmittedById == userId)
-            .OrderByDescending(t => t.DateCreated)
-            .ToListAsync();
-
-        return Ok(tickets.Select(t => new TicketResponse
-        {
-            Id = t.Id,
-            Title = t.Title,
-            Description = t.Description,
-            DateCreated = t.DateCreated,
-            DateResolved = t.DateResolved,
-            StatusName = t.Status?.Name,
-            PriorityName = t.Priority?.Name,
-            CategoryName = t.Category?.Name,
-            AssignedToName = t.AssignedTo?.UserName,
-            AssignedToId = t.AssignedToId,
-            SubmittedByName = t.SubmittedBy?.UserName,  
-            SubmittedById = t.SubmittedById,
-            AssignedByManagerName = t.AssignedByManager?.UserName,
-            AssignedByManagerId = t.AssignedByManagerId,
-        }));
     }
 
     // ── GET /api/tickets/{id}/comments ────────────────
     [HttpGet("{id}/comments")]
     public async Task<IActionResult> GetComments(int id)
     {
-        var ticket = await _db.Tickets.FindAsync(id);
-        if (ticket == null) return NotFound();
-
-        var comments = await _db.TicketComments
-            .Include(c => c.Author)
-            .Where(c => c.TicketId == id)
-            .OrderBy(c => c.CreatedAt)
-            .ToListAsync();
-
-        
-        return Ok(comments.Select(c => new CommentResponse
-        {
-            Id = c.Id,
-            Text = c.Text,
-            CreatedAt = c.CreatedAt,
-            AuthorName = c.Author?.UserName,
-            AuthorId = c.AuthorId,
-        }));
+        if (!await _tickets.TicketExistsAsync(id)) return NotFound();
+        return Ok(await _tickets.GetCommentsAsync(id));
     }
 
     // ── POST /api/tickets/{id}/comment ────────────────
@@ -255,88 +86,21 @@ public class TicketsController : ControllerBase
         if (!int.TryParse(User.FindFirst("sub")?.Value, out var userId))
             return Unauthorized();
 
-        var ticket = await _db.Tickets.FindAsync(id);
-        if (ticket == null) return NotFound();
+        var role = User.FindFirst("role")?.Value ?? "";
+        var (comment, error) = await _tickets.AddCommentAsync(id, req.Text, userId, role);
 
-        // only the submitter or the assigned agent can comment
-        if (ticket.SubmittedById != userId && ticket.AssignedToId != userId)
-            return Forbid();
-
-        var author = await _db.Users.FindAsync(userId);
-
-        var comment = new TicketComment
+        return error switch
         {
-            TicketId = id,
-            Text = req.Text,
-            CreatedAt = DateTime.UtcNow,
-            AuthorId = userId,
+            "NotFound" => NotFound(),
+            "Forbidden" => Forbid(),
+            null => Ok(comment),
+            _ => BadRequest(new { message = error }),
         };
-
-        _db.TicketComments.Add(comment);
-
-        _db.ActivityLogs.Add(new ActivityLog
-        {
-            TicketId = id,
-            UserId = userId,
-            EventType = "Comment",
-            Action = $"{author?.UserName} added a comment",
-            Timestamp = DateTime.UtcNow,
-        });
-        
-
-        if (userId == ticket.SubmittedById && ticket.AssignedToId != null)
-        {
-            await _notifier.NotifyAsync(
-                ticket.AssignedToId.Value,
-                ticket.Id,
-                "Comment",
-                $"{author?.UserName} commented on TKT-{ticket.Id:D4}"
-            );
-        }
-        else if (userId == ticket.AssignedToId)
-        {
-            await _notifier.NotifyAsync(
-                ticket.SubmittedById,
-                ticket.Id,
-                "Comment",
-                $"{author?.UserName} commented on TKT-{ticket.Id:D4}"
-            );
-        }
-
-        await _db.SaveChangesAsync();
-
-        
-        return Ok(new CommentResponse
-        {
-            Id = comment.Id,
-            Text = comment.Text,
-            CreatedAt = comment.CreatedAt,
-            AuthorName = author?.UserName,
-            AuthorId = userId,
-        });
     }
     // ── GET /api/tickets/{id}/activity ────────────────
-    [HttpGet("{id}/activity")]
-    public async Task<IActionResult> GetActivity(int id)
-    {
-        var ticket = await _db.Tickets.FindAsync(id);
-        if (ticket == null) return NotFound();
-
-        var logs = await _db.ActivityLogs
-            .Include(a => a.User)
-            .Where(a => a.TicketId == id)
-            .OrderBy(a => a.Timestamp)
-            .ToListAsync();
-
-        return Ok(logs.Select(a => new
-        {
-            a.Id,
-            a.Action,
-            a.EventType,
-            a.Timestamp,
-            UserName = a.User?.UserName,
-        }));
-    }
+    [HttpGet("{id}/attachments")]
+    public async Task<IActionResult> GetAttachments(int id) =>
+        Ok(await _tickets.GetAttachmentsAsync(id));
     // ── POST /api/tickets/{id}/attachments ─────────────────────
     [HttpPost("{id}/attachments")]
     public async Task<IActionResult> AddAttachment(int id, [FromForm] IFormFile file)
@@ -347,77 +111,32 @@ public class TicketsController : ControllerBase
         if (!int.TryParse(User.FindFirst("sub")?.Value, out var userId))
             return Unauthorized();
 
-        var ticket = await _db.Tickets.FindAsync(id);
-        if (ticket == null) return NotFound();
+        var (result, error) = await _tickets.AddAttachmentAsync(id, file, userId);
 
-        using var ms = new MemoryStream();
-        await file.CopyToAsync(ms);
-
-        var attachment = new TicketAttachment
+        return error switch
         {
-            TicketId = id,
-            FileName = file.FileName,
-            ContentType = file.ContentType,
-            Content = ms.ToArray(),
-            UploadedById = userId,
+            "NotFound" => NotFound(),
+            null => Ok(result),
+            _ => BadRequest(new { message = error }),
         };
-        _db.TicketAttachments.Add(attachment);
-
-        var uploader = await _db.Users.FindAsync(userId);
-        _db.ActivityLogs.Add(new ActivityLog
-        {
-            TicketId = id,
-            UserId = userId,
-            EventType = "Attachment",
-            Action = $"{uploader?.UserName} added attachment \"{file.FileName}\"",
-            Timestamp = DateTime.UtcNow,
-        });
-
-        await _db.SaveChangesAsync();
-
-        return Ok(new
-        {
-            attachment.Id,
-            attachment.FileName,
-            attachment.ContentType,
-            UploadedByName = uploader?.UserName,
-        });
     }
 
-    // ── GET /api/tickets/{id}/attachments — list (no bytes) ──
-    [HttpGet("{id}/attachments")]
-    public async Task<IActionResult> GetAttachments(int id)
-    {
-        var attachments = await _db.TicketAttachments
-            .Include(a => a.UploadedBy)
-            .Where(a => a.TicketId == id)
-            .OrderBy(a => a.Id)
-            .ToListAsync();
 
-        return Ok(attachments.Select(a => new
-        {
-            a.Id,
-            a.FileName,
-            a.ContentType,
-            UploadedByName = a.UploadedBy?.UserName,
-        }));
-    }
 
     // ── GET /api/tickets/attachments/{attachmentId}/view — opens the file ──
     [HttpGet("attachments/{attachmentId}/view")]
     public async Task<IActionResult> ViewAttachment(int attachmentId)
     {
-        var attachment = await _db.TicketAttachments.FindAsync(attachmentId);
-        if (attachment == null || attachment.Content == null) return NotFound();
-
-        // returning with the original content type lets the browser render
-        // images/PDFs inline instead of forcing a download
-        return File(attachment.Content, attachment.ContentType ?? "application/octet-stream");
+        var (content, contentType) = await _tickets.GetAttachmentBytesAsync(attachmentId);
+        if (content == null) return NotFound();
+        return File(content, contentType ?? "application/octet-stream");
     }
 
-    
-
-
-    public record AssignRequest(int UserId);
-
+    [HttpGet("{id}/activity")]
+    public async Task<IActionResult> GetActivity(int id) =>
+        Ok(await _tickets.GetActivityAsync(id));
 }
+
+
+
+

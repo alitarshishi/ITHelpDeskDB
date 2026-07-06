@@ -23,6 +23,8 @@ public class AppDbContext : DbContext
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<ActivityLog> ActivityLogs => Set<ActivityLog>();
 
+    public DbSet<PasswordResetToken> PasswordResetTokens { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -95,6 +97,69 @@ public class AppDbContext : DbContext
             .HasForeignKey(n => n.TicketId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.SubmittedById)
+            .HasDatabaseName("IX_Tickets_SubmittedById");
+
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.AssignedToId)
+            .HasDatabaseName("IX_Tickets_AssignedToId");
+
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.AssignedByManagerId)
+            .HasDatabaseName("IX_Tickets_AssignedByManagerId");
+
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.StatusId)
+            .HasDatabaseName("IX_Tickets_StatusId");
+
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.DateCreated)
+            .HasDatabaseName("IX_Tickets_DateCreated");
+
+        // Composite index for dashboard queries — period + status in one scan
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => new { t.DateCreated, t.StatusId })
+            .HasDatabaseName("IX_Tickets_DateCreated_StatusId");
+
+        // Comments — always queried by TicketId
+        modelBuilder.Entity<TicketComment>()
+            .HasIndex(c => c.TicketId)
+            .HasDatabaseName("IX_TicketComments_TicketId");
+
+        // Activity logs — always queried by TicketId, ordered by Timestamp
+        modelBuilder.Entity<ActivityLog>()
+            .HasIndex(a => a.TicketId)
+            .HasDatabaseName("IX_ActivityLogs_TicketId");
+
+        modelBuilder.Entity<ActivityLog>()
+            .HasIndex(a => new { a.TicketId, a.Timestamp })
+            .HasDatabaseName("IX_ActivityLogs_TicketId_Timestamp");
+
+        // Notifications — queried by RecipientId + IsRead constantly
+        modelBuilder.Entity<Notification>()
+            .HasIndex(n => n.RecipientId)
+            .HasDatabaseName("IX_Notifications_RecipientId");
+
+        modelBuilder.Entity<Notification>()
+            .HasIndex(n => new { n.RecipientId, n.IsRead })
+            .HasDatabaseName("IX_Notifications_RecipientId_IsRead");
+
+        // Attachments — queried by TicketId for list, by Id for view
+        modelBuilder.Entity<TicketAttachment>()
+            .HasIndex(a => a.TicketId)
+            .HasDatabaseName("IX_TicketAttachments_TicketId");
+
+        // Password reset tokens — looked up by Token string every reset attempt
+        modelBuilder.Entity<PasswordResetToken>()
+            .HasIndex(t => t.Token)
+            .IsUnique()
+            .HasDatabaseName("IX_PasswordResetTokens_Token");
+
+        modelBuilder.Entity<PasswordResetToken>()
+            .HasIndex(t => new { t.UserId, t.IsUsed })
+            .HasDatabaseName("IX_PasswordResetTokens_UserId_IsUsed");
+
         // Seed some basic lookup data and test users + tickets
         modelBuilder.Entity<Role>().HasData(
             new Role { Id = 1, Name = "Admin" },
@@ -110,14 +175,14 @@ public class AppDbContext : DbContext
             new Category { Id = 4, Name = "Email" },
             new Category { Id = 5, Name = "Access" },
             new Category { Id = 6, Name = "Other" }
-);
+        );
 
         modelBuilder.Entity<Priority>().HasData(
            new Priority { Id = 1, Name = "Low" },
            new Priority { Id = 2, Name = "Medium" },
            new Priority { Id = 3, Name = "High" },
            new Priority { Id = 4, Name = "Critical" }
-);
+        );
 
         modelBuilder.Entity<Status>().HasData(
             new Status { Id = 1, Name = "Open" },
@@ -127,88 +192,6 @@ public class AppDbContext : DbContext
             new Status { Id = 5, Name = "Escalated" }
         );
 
-        // Create deterministic seeded users (Admin, Employee, ITAgent, Manager)
-        // We'll create fixed salts and precomputed hashes so the seed is repeatable.
-        byte[] aliSalt = Encoding.UTF8.GetBytes("ali-seed-salt..01");
-        byte[] saraSalt = Encoding.UTF8.GetBytes("sara-seed-salt.02");
-        byte[] agentSalt = Encoding.UTF8.GetBytes("agent-seed-salt.03");
-        byte[] managerSalt = Encoding.UTF8.GetBytes("manager-seed-salt04");
-        if (aliSalt.Length != 16) Array.Resize(ref aliSalt, 16);
-        if (saraSalt.Length != 16) Array.Resize(ref saraSalt, 16);
-        if (agentSalt.Length != 16) Array.Resize(ref agentSalt, 16);
-        if (managerSalt.Length != 16) Array.Resize(ref managerSalt, 16);
 
-        static string HashBase64(string password, byte[] salt)
-        {
-            using var pbkdf2 = new Rfc2898DeriveBytes(password, salt, 100_000, HashAlgorithmName.SHA256);
-            return Convert.ToBase64String(pbkdf2.GetBytes(32));
-        }
-
-        modelBuilder.Entity<User>().HasData(
-            new User
-            {
-                Id = 1,
-                UserName = "Ali",
-                Email = "ali@example.com",
-                RoleId = 1,
-                PasswordSalt = Convert.ToBase64String(aliSalt),
-                PasswordHash = HashBase64("AliPassword!23", aliSalt)
-            },
-            new User
-            {
-                Id = 2,
-                UserName = "Sara",
-                Email = "sara@example.com",
-                RoleId = 2,
-                PasswordSalt = Convert.ToBase64String(saraSalt),
-                PasswordHash = HashBase64("SaraPassword!23", saraSalt)
-            },
-            new User
-            {
-                Id = 3,
-                UserName = "TomAgent",
-                Email = "tom.agent@example.com",
-                RoleId = 3,
-                PasswordSalt = Convert.ToBase64String(agentSalt),
-                PasswordHash = HashBase64("AgentPassword!23", agentSalt)
-            },
-            new User
-            {
-                Id = 4,
-                UserName = "MonaManager",
-                Email = "mona.manager@example.com",
-                RoleId = 4,
-                PasswordSalt = Convert.ToBase64String(managerSalt),
-                PasswordHash = HashBase64("ManagerPassword!23", managerSalt)
-            }
-        );
-
-        // Use fixed DateTime values for seeded tickets to avoid pending model changes on every build
-        modelBuilder.Entity<Ticket>().HasData(
-            new Ticket
-            {
-                Id = 1,
-                Title = "Admin created ticket",
-                Description = "Test ticket created by admin",
-                DateCreated = new DateTime(2026, 5, 30, 12, 0, 0, DateTimeKind.Utc),
-                SubmittedById = 1,
-                AssignedToId = 2,
-                CategoryId = 1,
-                PriorityId = 1,
-                StatusId = 1
-            },
-            new Ticket
-            {
-                Id = 2,
-                Title = "Employee ticket",
-                Description = "Test ticket created by employee",
-                DateCreated = new DateTime(2026, 5, 30, 12, 5, 0, DateTimeKind.Utc),
-                SubmittedById = 2,
-                AssignedToId = null,
-                CategoryId = 1,
-                PriorityId = 1,
-                StatusId = 1
-            }
-        );
     }
 }

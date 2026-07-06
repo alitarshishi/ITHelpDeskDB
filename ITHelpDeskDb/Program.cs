@@ -6,6 +6,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using ITHelpDeskDb.Hubs;
 using ITHelpDeskDb.Services;
+using ITHelpDeskDb.Middleware;  
 
 namespace ITHelpDeskDb
 {
@@ -18,6 +19,7 @@ namespace ITHelpDeskDb
             builder.Services.AddRazorPages();
             builder.Services.AddControllers();
             builder.Services.AddSignalR();
+            builder.Services.AddHttpClient();
 
             // JWT
             var jwtKey = builder.Configuration["Jwt:Key"] ?? "ChangeThisDefaultKeyToSomethingSecure";
@@ -77,7 +79,16 @@ namespace ITHelpDeskDb
             builder.Services.AddDbContext<AppDbContext>(options =>
                 options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
+            builder.Services.AddScoped<AuthService>();
+            builder.Services.AddScoped<NotificationQueryService>();  
+            builder.Services.AddScoped<DashboardService>();          
+            builder.Services.AddScoped<ExportService>();             
+            builder.Services.AddScoped<AiService>();
+            builder.Services.AddScoped<UserService>();
+            builder.Services.AddScoped<TicketService>();
             builder.Services.AddScoped<NotificationService>();
+            builder.Services.AddScoped<EmailService>();
+            builder.Services.AddScoped<PasswordResetService>();
 
             var app = builder.Build();
 
@@ -93,6 +104,7 @@ namespace ITHelpDeskDb
             app.UseCors("AllowReact");   
 
             app.UseAuthentication();
+            app.UseMiddleware<ITHelpDeskDb.Middleware.ActiveUserMiddleware>();
             app.UseAuthorization();
 
             app.MapStaticAssets();
