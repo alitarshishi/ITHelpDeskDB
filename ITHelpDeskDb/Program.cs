@@ -6,7 +6,9 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using ITHelpDeskDb.Hubs;
 using ITHelpDeskDb.Services;
-using ITHelpDeskDb.Middleware;  
+using ITHelpDeskDb.Middleware;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 
 namespace ITHelpDeskDb
 {
@@ -60,9 +62,14 @@ namespace ITHelpDeskDb
                     }
                 };
             });
+            builder.Services.AddResponseCaching();
+            builder.Services.AddOutputCache(options =>
+            {
+                options.AddBasePolicy(builder => builder.Cache());
+            });
 
 
-            
+
 
             builder.Services.AddAuthorization();
 
@@ -74,6 +81,36 @@ namespace ITHelpDeskDb
                           .AllowAnyHeader()
                           .AllowAnyMethod()
                           .AllowCredentials());
+            });
+
+            builder.Services.AddRateLimiter(options =>
+            {
+                //  Auth endpoints — 5 attempts per minute per IP 
+                options.AddFixedWindowLimiter("auth", limiter =>
+                {
+                    limiter.PermitLimit = 5;
+                    limiter.Window = TimeSpan.FromMinutes(1);
+                    limiter.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+                    limiter.QueueLimit = 0;
+                });
+                //  General API — 100 requests per minute per IP 
+                options.AddFixedWindowLimiter("api", limiter =>
+                {
+                    limiter.PermitLimit = 100;
+                    limiter.Window = TimeSpan.FromMinutes(1);
+                    limiter.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+                    limiter.QueueLimit = 2;
+                });
+                // Return 429 Too Many Requests with a clear message
+                options.OnRejected = async (context, token) =>
+                {
+                    context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                    context.HttpContext.Response.ContentType = "application/json";
+                    await context.HttpContext.Response.WriteAsJsonAsync(new
+                    {
+                        message = "Too many requests. Please wait a moment and try again."
+                    }, token);
+                };
             });
 
             builder.Services.AddDbContext<AppDbContext>(options =>
@@ -101,10 +138,15 @@ namespace ITHelpDeskDb
             app.UseHttpsRedirection();
             app.UseRouting();
 
+            app.UseResponseCaching();
+            app.UseOutputCache();
+
             app.UseCors("AllowReact");   
 
             app.UseAuthentication();
-            app.UseMiddleware<ITHelpDeskDb.Middleware.ActiveUserMiddleware>();
+            app.UseRateLimiter();
+            app.UseMiddleware<GlobalExceptionMiddleware>();
+            app.UseMiddleware<ActiveUserMiddleware>();
             app.UseAuthorization();
 
             app.MapStaticAssets();

@@ -104,4 +104,65 @@ JSON format:
             return (null, $"Unexpected error: {ex.Message}");
         }
     }
+    public async Task<(ChatResponse? result, string? error)> ChatAsync(List<ChatMessageDto> history)
+    {
+        var apiKey = _config["Groq:ApiKey"];
+        if (string.IsNullOrEmpty(apiKey))
+            return (null, "AI service is not configured.");
+
+        const string systemPrompt = @"You are the IT Help Desk assistant embedded in an internal support app.
+Your job is to help employees solve common IT issues themselves WITHOUT creating a ticket, whenever possible.
+
+Guidelines:
+- Ask at most one clarifying question at a time if you need more info.
+- Give short, concrete, numbered troubleshooting steps (restart steps, cache clearing, password resets,
+  printer/network basics, Office/Outlook issues, VPN, common error messages, etc).
+- Keep answers concise — a few sentences or a short numbered list, not long essays.
+- If the issue truly requires IT intervention (hardware failure, account lockout requiring admin,
+  security incident, permissions change, anything you cannot resolve via steps), tell the user plainly
+  and suggest they use the ""Create Ticket"" button so it reaches the IT team.
+- Never claim to have performed an action yourself (you cannot reset accounts, ship hardware, etc).
+- Stay strictly scoped to IT/workplace tech support topics.";
+
+        var messages = new List<object> { new { role = "system", content = systemPrompt } };
+        messages.AddRange(history.Select(m => (object)new { role = m.Role, content = m.Content }));
+
+        var body = new
+        {
+            model = "llama-3.3-70b-versatile",
+            messages,
+            temperature = 0.4,
+        };
+
+        try
+        {
+            var client = _httpClientFactory.CreateClient();
+            client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
+
+            var response = await client.PostAsync(
+                "https://api.groq.com/openai/v1/chat/completions",
+                new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                return (null, $"AI service error: {errorBody}");
+            }
+
+            var responseJson = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(responseJson);
+
+            var content = doc.RootElement
+                .GetProperty("choices")[0]
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString();
+
+            return (new ChatResponse { Reply = content ?? "" }, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, $"Unexpected error: {ex.Message}");
+        }
+    }
 }

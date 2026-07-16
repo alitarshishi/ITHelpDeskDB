@@ -6,7 +6,7 @@ namespace ITHelpDeskDb.Controllers.Api;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = "Admin")]
+[Authorize(Roles = "Admin,Manager")]
 public class ExportController : ControllerBase
 {
     private readonly ExportService _export;

@@ -2,6 +2,7 @@ using ITHelpDeskDb.Models.DTOs.Requests;
 using ITHelpDeskDb.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace ITHelpDeskDb.Controllers.Api;
 
@@ -19,6 +20,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("login")]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> Login([FromBody] LoginRequest req)
     {
         if (req is null || string.IsNullOrEmpty(req.Email) || string.IsNullOrEmpty(req.Password))
@@ -39,6 +41,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("forgot-password")]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest req)
     {
         if (req is null || string.IsNullOrEmpty(req.Email))
@@ -51,6 +54,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("reset-password")]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest req)
     {
         if (req is null || string.IsNullOrEmpty(req.Token) || string.IsNullOrEmpty(req.NewPassword))

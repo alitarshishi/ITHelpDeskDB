@@ -158,4 +158,99 @@ public class UserService
         await _db.SaveChangesAsync();
         return (true, $"{user.UserName}'s role changed to {roleName}.");
     }
+
+    public async Task<ProfileResponse?> GetProfileAsync(int userId) =>
+    await _db.Users
+        .Where(u => u.Id == userId)
+        .Select(u => new ProfileResponse
+        {
+            Id = u.Id,
+            UserName = u.UserName,
+            Email = u.Email,
+            Role = u.Role.Name,
+            HasAvatar = u.AvatarImage != null,
+        })
+        .FirstOrDefaultAsync();
+
+    public async Task<(bool success, string message)> UpdateProfileAsync(
+        int userId, UpdateProfileRequest req)
+    {
+        var user = await _db.Users.FindAsync(userId);
+        if (user == null) return (false, "User not found.");
+
+        bool emailChanged = req.Email != user.Email;
+
+        bool emailTaken = await _db.Users.AnyAsync(u => u.Id != userId && u.Email == req.Email);
+        if (emailTaken) return (false, "That email is already in use.");
+
+        user.UserName = req.UserName;
+        user.Email = req.Email;
+        user.UpdatedDate = DateTime.UtcNow;
+
+        if (emailChanged)
+            user.TokensValidFrom = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+        return (true, "Profile updated successfully.");
+    }
+
+    public async Task<(bool success, string message)> ChangePasswordAsync(
+        int userId, string currentPassword, string newPassword)
+    {
+        var user = await _db.Users.FindAsync(userId);
+        if (user == null) return (false, "User not found.");
+
+        if (!user.VerifyPassword(currentPassword))
+            return (false, "Current password is incorrect.");
+
+        if (newPassword.Length < 8)
+            return (false, "New password must be at least 8 characters.");
+
+        user.SetPassword(newPassword);
+        user.UpdatedDate = DateTime.UtcNow;
+        user.TokensValidFrom = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return (true, "Password changed successfully.");
+    }
+
+    public async Task<(bool success, string? error)> UpdateAvatarAsync(int userId, IFormFile file)
+    {
+        var allowedTypes = new HashSet<string> { "image/png", "image/jpeg", "image/webp", "image/gif" };
+        const long maxSize = 3 * 1024 * 1024; // 3 MB
+
+        if (file == null || file.Length == 0) return (false, "No file provided.");
+        if (file.Length > maxSize) return (false, "Image must be under 3 MB.");
+        if (!allowedTypes.Contains(file.ContentType.ToLower()))
+            return (false, "Only PNG, JPEG, GIF, or WEBP images are allowed.");
+
+        var user = await _db.Users.FindAsync(userId);
+        if (user == null) return (false, "User not found.");
+
+        using var ms = new MemoryStream();
+        await file.CopyToAsync(ms);
+        user.AvatarImage = ms.ToArray();
+        user.AvatarContentType = file.ContentType;
+
+        await _db.SaveChangesAsync();
+        return (true, null);
+    }
+
+    public async Task<bool> RemoveAvatarAsync(int userId)
+    {
+        var user = await _db.Users.FindAsync(userId);
+        if (user == null) return false;
+        user.AvatarImage = null;
+        user.AvatarContentType = null;
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<(byte[]? content, string? contentType)> GetAvatarAsync(int userId)
+    {
+        var u = await _db.Users
+            .Where(x => x.Id == userId)
+            .Select(x => new { x.AvatarImage, x.AvatarContentType })
+            .FirstOrDefaultAsync();
+        return (u?.AvatarImage, u?.AvatarContentType);
+    }
 }

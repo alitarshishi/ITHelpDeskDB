@@ -6,6 +6,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 
+
 namespace ITHelpDeskDb.Services;
 
 public class AuthResult
@@ -23,11 +24,17 @@ public class AuthService
     private readonly AppDbContext _db;
     private readonly IConfiguration _config;
 
+
+
     public AuthService(AppDbContext db, IConfiguration config)
     {
         _db = db;
         _config = config;
+
+
     }
+
+
 
     public async Task<AuthResult> LoginAsync(string email, string password)
     {
@@ -83,6 +90,7 @@ public class AuthService
         };
     }
 
+
     private string GenerateToken(int id, string userName, string email, string role)
     {
         var jwtKey = _config["Jwt:Key"] ?? "ChangeThisDefaultKeyToSomethingSecure";
@@ -97,6 +105,9 @@ public class AuthService
             new Claim("name",  userName),
             new Claim("email", email),
             new Claim("role",  role),
+            new Claim(JwtRegisteredClaimNames.Iat,
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
+            ClaimValueTypes.Integer64),
         };
 
         var token = new JwtSecurityToken(
@@ -108,6 +119,7 @@ public class AuthService
 
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
+
 
     private static AuthResult Fail(string error) =>
         new AuthResult { Success = false, Error = error };
